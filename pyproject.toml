@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minimax-h3-long-video"
+version = "0.1.0"
+description = "A resumable 60-second video orchestration baseline built on MiniMax H3 Ref2VA."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+runtime = [
+  "torch",
+  "diffusers>=0.40.0",
+  "transformers",
+  "accelerate",
+  "av",
+  "pillow",
+]
+dev = [
+  "pytest",
+  "ruff",
+]
+
+[project.scripts]
+h3-long-video = "minimax_h3_long_video.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+

@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Local model and runtime files
+ckpts/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# Generated media and run state
+outputs/*
+!outputs/.gitkeep
+*.mp4
+*.mov
+*.wav
+*.flac
+*.png
+*.jpg
+*.jpeg
+
+# Local data and secrets
+data/raw/
+data/processed/
+data/cache/
+.env
+.env.*
+
