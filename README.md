@@ -1,35 +1,111 @@
-# MiniMax H3 Long Video Pipeline
+# MiniMax H3 Long Video
 
-This repository contains a small, resumable orchestration baseline for producing a 60-second video from a complete storyboard and reference assets with MiniMax H3 Ref2VA.
+An inference pipeline that turns a 60-second storyboard and reference assets into a 60-second video by orchestrating multiple MiniMax H3 Ref2VA windows.
 
-The baseline keeps every model request inside the public H3 context contract. The current Diffusers integration uses the largest strictly legal aligned request, 345 frames at 24 FPS (14.375 seconds), and composes five overlapping windows:
+The pipeline keeps each H3 request within the supported window and reference limits, carries visual continuity through the previous window tail, and stitches the generated windows into one MP4 file.
+
+## What it provides
+
+- Validates a 60-second storyboard, shot timeline, assets, and reference constraints.
+- Splits the timeline into five H3-compatible windows: 345 frames / 14.375 seconds per window at 24 FPS, with a 2.96875-second overlap.
+- Routes persistent and time-scoped image, video, and audio references to each window.
+- Detects audio streams in video references and keeps H3 `<Audio N>` prompt labels aligned with the reference order.
+- Generates a continuation tail after every window for the next Ref2VA request.
+- Uses `ffmpeg` to crossfade the windows and produce `final_60s.mp4`.
+- Supports interruption recovery through `--resume` and a manifest fingerprint.
+- Provides dry-run, CPU-only contract tests, and a CI workflow.
+
+## Pipeline
 
 ```text
-5 × 14.375 - 4 × 2.96875 = 60 seconds
+storyboard.json
+      │
+      ▼
+validate + schedule H3 windows
+      │
+      ├── select active references
+      ├── build window prompt
+      └── generate one H3 Ref2VA window
+                    │
+                    ├── save chunk MP4
+                    └── extract continuation tail
+                              │
+                              ▼
+                    crossfade chunks with ffmpeg
+                              │
+                              ▼
+                         final_60s.mp4
 ```
 
-This is an orchestration pipeline, not a native 60-second H3 model. It does not modify H3 Base weights, MM-RoPE, the VAE, or the Attention implementation.
+## Requirements
 
-## Quick start
+- Python 3.10 or newer.
+- For dry-run and tests: Python standard library only.
+- For generation: PyTorch, a Diffusers version with MiniMax H3 support, `ffmpeg`, and `ffprobe`.
+- A device and model environment that can load `MiniMaxAI/MiniMax-H3` or another compatible H3 model.
 
-The dry run validates the storyboard, H3 frame grid, asset routing, prompts, and exact timeline without loading model weights:
+The repository does not include model weights or media assets. The default model is `MiniMaxAI/MiniMax-H3`; review the upstream model license before use.
+
+## Installation
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+
+# CPU checks and tests
 pip install -e ".[dev]"
 
+# Runtime dependencies for generation
+pip install -e ".[runtime]"
+```
+
+Check the external tools before a real run:
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
+
+## Quick start
+
+### Dry-run
+
+The dry-run validates the storyboard and writes the planned prompts and chunk schedule without loading model weights or reading real media files:
+
+```bash
 PYTHONPATH=src python -m minimax_h3_long_video \
   configs/storyboard.example.json \
   --dry-run \
   --output-dir outputs/h3_60s_dry_run
 ```
 
-For real generation, install the optional runtime dependencies and make `ffmpeg` and `ffprobe` available on `PATH`:
+### Generate a video
+
+Copy `configs/storyboard.example.json`, replace the asset paths with real files, and run:
 
 ```bash
-pip install -e ".[runtime]"
+PYTHONPATH=src python -m minimax_h3_long_video \
+  configs/storyboard.json \
+  --output-dir outputs/my_60s_run \
+  --model-id MiniMaxAI/MiniMax-H3 \
+  --device cuda \
+  --dtype bfloat16
+```
 
+The installed console entry point is also available:
+
+```bash
+h3-long-video configs/storyboard.json \
+  --output-dir outputs/my_60s_run \
+  --device cuda \
+  --dtype bfloat16
+```
+
+### Resume an interrupted run
+
+Use the same storyboard, assets, model options, chunk options, and seed:
+
+```bash
 PYTHONPATH=src python -m minimax_h3_long_video \
   configs/storyboard.json \
   --output-dir outputs/my_60s_run \
@@ -38,16 +114,106 @@ PYTHONPATH=src python -m minimax_h3_long_video \
   --resume
 ```
 
-The example configuration contains placeholder asset paths. Replace them with real files before a non-dry run. No model weights, generated media, or private data belong in Git.
+`--resume` requires `manifest.json` in the output directory. Existing chunks are reused only when the run fingerprint matches the storyboard, generation options, chunk plan, and asset path metadata. A mismatch stops the run to prevent mixing outputs from different inputs. Completed chunks are media-validated before reuse, and continuation tails are regenerated from the current chunks.
 
-## Requirements and verification
+### Generate chunks without stitching
 
-- Python 3.10 or newer.
-- Dry-run and contract tests require no GPU, model weights, or media assets.
-- Real generation requires a compatible PyTorch/Diffusers environment, `ffmpeg`, and `ffprobe` on `PATH`.
-- The default model is `MiniMaxAI/MiniMax-H3`; review the upstream model license before use or redistribution.
+```bash
+PYTHONPATH=src python -m minimax_h3_long_video \
+  configs/storyboard.json \
+  --output-dir outputs/chunks_only \
+  --device cuda \
+  --dtype bfloat16 \
+  --skip-stitch
+```
 
-Run the CPU-only checks from the repository root:
+## Storyboard format
+
+Use [`configs/storyboard.example.json`](configs/storyboard.example.json) as the complete template. The top-level fields are:
+
+| Field | Description |
+|---|---|
+| `duration_s` | Must be `60`. |
+| `fps` | Must be `24`. |
+| `global_prompt` | Global visual and motion instructions. |
+| `continuity` | Optional continuity instructions such as character, environment, camera, lighting, color, and audio. |
+| `assets` | Reference assets used by the windows. |
+| `shots` | Ordered, gap-free shot intervals covering `[0, 60)`. |
+| `master_audio` | Optional final soundtrack path. When set, it replaces generated chunk audio during final stitching. |
+
+Each asset has the following shape:
+
+```json
+{
+  "id": "hero",
+  "kind": "image",
+  "path": "../data/examples/assets/hero.png",
+  "role": "persistent",
+  "description": "the main character reference"
+}
+```
+
+Supported `kind` values are `image`, `video`, and `audio`. A `transient` asset must also define `start_s` and `end_s`; it is included only in overlapping windows. Each shot uses `asset_ids` to select the references active in that shot.
+
+Reference validation follows the H3 Ref2VA contract:
+
+- Up to 9 image references, 3 video references, 3 audio references, and 12 total references per request.
+- Video references must each be 2–15.2 seconds, with a total of 15.2 seconds or less; each video is checked before the model call.
+- Each explicit audio reference must be 2–15 seconds, and explicit audio must be 15 seconds or less in total.
+- An explicit audio reference cannot be the only reference in a request.
+
+## Command-line options
+
+| Option | Default | Description |
+|---|---:|---|
+| `--output-dir` | `outputs/h3_60s` | Directory for prompts, chunks, tails, manifest, and final video. |
+| `--model-id` | `MiniMaxAI/MiniMax-H3` | H3 model identifier. |
+| `--device` | `cuda` | Torch device. |
+| `--dtype` | `bfloat16` | `bfloat16`, `float16`, or `float32`. |
+| `--height` | `768` | Output height; must be divisible by 32. |
+| `--width` | `1344` | Output width; must be divisible by 32. |
+| `--chunk-seconds` | `14.375` | H3 window duration. |
+| `--chunks` | `5` | Number of windows. |
+| `--seed` | `20260920` | Base seed; window `i` uses `seed + i`. |
+| `--dry-run` | off | Validate and plan without model inference. |
+| `--resume` | off | Reuse compatible completed chunks. |
+| `--skip-stitch` | off | Stop after chunk generation. |
+
+## Output files
+
+A completed run normally contains:
+
+```text
+outputs/my_60s_run/
+├── manifest.json
+├── chunk_plan.json
+├── chunk_01.prompt.txt ... chunk_05.prompt.txt
+├── chunk_01.mp4 ... chunk_05.mp4
+├── tail_01.mp4 ... tail_04.mp4
+└── final_60s.mp4
+```
+
+`manifest.json` records the run fingerprint, chunk status, media metadata, and final output status. Generated media and run directories are ignored by Git.
+
+## Code map
+
+| Path | Responsibility |
+|---|---|
+| `src/minimax_h3_long_video/cli.py` | Parses command-line arguments and starts a run. |
+| `src/minimax_h3_long_video/runner.py` | Coordinates validation, scheduling, generation, resume, and stitching. |
+| `src/minimax_h3_long_video/storyboard.py` | Loads and validates the storyboard JSON. |
+| `src/minimax_h3_long_video/schemas.py` | Defines storyboard, asset, shot, and chunk records. |
+| `src/minimax_h3_long_video/scheduler.py` | Aligns frame counts and creates the H3 window plan. |
+| `src/minimax_h3_long_video/assets.py` | Selects persistent and time-scoped assets for each window. |
+| `src/minimax_h3_long_video/prompting.py` | Builds deterministic prompts and reference labels. |
+| `src/minimax_h3_long_video/references.py` | Validates and constructs H3 Ref2VA references. |
+| `src/minimax_h3_long_video/media_probe.py` | Reads media metadata and validates durations and streams. |
+| `src/minimax_h3_long_video/h3_adapter.py` | Loads Diffusers and executes one H3 generation request. |
+| `src/minimax_h3_long_video/media_edit.py` | Extracts tails and stitches MP4 windows with ffmpeg. |
+| `src/minimax_h3_long_video/manifest.py` | Reads and atomically writes run state. |
+| `tests/` | CPU-only tests for scheduling, storyboard validation, and runtime contracts. |
+
+## Verification
 
 ```bash
 python -m compileall -q src tests
@@ -55,59 +221,8 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 ./scripts/check_dry_run.sh
 ```
 
-## Storyboard contract and resume behavior
+## Related projects
 
-The current baseline requires `duration_s=60` and `fps=24`. Shots must cover the full timeline without gaps, and asset paths are resolved relative to the storyboard file. Assets may be `image`, `video`, or `audio`; an explicit Ref2VA audio reference cannot be the only reference, each explicit audio must be 2–15 seconds, and their total duration must not exceed 15 seconds.
-
-`--resume` reuses completed chunk videos only when the existing manifest fingerprint matches the storyboard, generation configuration, chunk plan, and asset metadata. A mismatch stops the run instead of mixing incompatible outputs. Continuation tails are regenerated from the current chunk after successful generation, and the H3 pipeline is loaded only when a missing chunk requires inference.
-
-## Repository layout
-
-```text
-code/
-├── README.md                         # English entry point
-├── README.zh-CN.md                   # Chinese entry point
-├── pyproject.toml                    # Package and dependency metadata
-├── configs/                          # Reproducible public configuration examples
-├── src/minimax_h3_long_video/        # Runtime package
-│   ├── assets.py                     # Window-local and persistent asset selection
-│   ├── cli.py                        # Command-line parsing only
-│   ├── constants.py                  # H3 contract and project defaults
-│   ├── errors.py                     # Project-level exceptions
-│   ├── h3_adapter.py                 # Lazy Diffusers loading and one-window generation
-│   ├── manifest.py                   # Atomic resumable manifest writes
-│   ├── media_edit.py                 # ffmpeg tail extraction and stitching
-│   ├── media_probe.py                # ffprobe metadata and media validation
-│   ├── prompting.py                  # Deterministic H3 full-reference prompt composer
-│   ├── references.py                 # H3 Ref2VA reference construction and limits
-│   ├── runner.py                     # End-to-end orchestration
-│   ├── schemas.py                    # Typed storyboard and chunk records
-│   ├── scheduler.py                  # VAE-aligned frame count and window planning
-│   └── storyboard.py                  # JSON loading and contract validation
-├── tests/                            # CPU-only contract tests
-├── docs/                             # Architecture and maintenance notes
-├── data/                             # Data contract and future dataset placeholders
-├── training/                         # Future post-training/LoRA placeholders
-├── scripts/                          # Reproducible maintenance entry points
-└── outputs/                          # Local generated runs, ignored by Git
-```
-
-`CHANGELOG.md` records repository-level changes, `CONTRIBUTING.md` defines the maintenance contract, and `.github/workflows/ci.yml` runs CPU-only compilation and contract tests on every push and pull request.
-
-## Module boundaries
-
-Every Python module has one primary responsibility. Runtime dependencies are imported only in `h3_adapter.py` and `references.py`, so planning and CPU-only tests do not require a GPU or model download. Downstream code imports stable functions from the package instead of duplicating implementation.
-
-Python identifiers and filenames use English. Comments and docstrings are written in Chinese to keep implementation notes consistent for the project team.
-
-## Scope and future extension
-
-The current code implements inference-time orchestration only. The repository reserves `data/` for source media, manifests, latent caches, and evaluation splits, and `training/` for continuation-LoRA datasets, post-training code, and configs. These directories contain contracts and placeholders, not an unverified training implementation.
-
-The next post-training interface should attach a frozen-Base continuation adapter while preserving the same `ChunkSpec`, storyboard, reference ordering, and manifest formats.
-
-## Upstream boundaries
-
-The implementation follows the public MiniMax H3 and Diffusers interfaces. H3 checkpoints and their model license remain upstream assets. Do not commit weights, API credentials, generated private media, or copied upstream source into this repository. Review the upstream license before redistribution.
-
-Related engineering references include [MiniMax H3](https://github.com/MiniMax-AI/MiniMax-H3), [Diffusers MiniMax H3](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3), and [VDN-Minimax-H3](https://github.com/OpenVDN/vdn-minimax-h3).
+- [MiniMax H3](https://github.com/MiniMax-AI/MiniMax-H3)
+- [Diffusers MiniMax H3 pipeline](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3)
+- [VDN-Minimax-H3](https://github.com/OpenVDN/vdn-minimax-h3)
