@@ -1,18 +1,33 @@
 # Python
 __pycache__/
 *.py[cod]
+.coverage
+coverage.xml
+htmlcov/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
 .venv/
 venv/
 dist/
 build/
 *.egg-info/
 
+# OS and editor files
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
 # Local model and runtime files
 ckpts/
 checkpoints/
+models/
+hf_models/
 *.safetensors
 *.bin
 *.pt
@@ -22,6 +37,10 @@ checkpoints/
 # Generated media and run state
 outputs/*
 !outputs/.gitkeep
+eval/runs/
+sft/runs/
+training/runs/
+wandb/
 *.mp4
 *.mov
 *.wav
@@ -36,4 +55,5 @@ data/processed/
 data/cache/
 .env
 .env.*
-
+*.log
+*.tmp

@@ -40,6 +40,27 @@ PYTHONPATH=src python -m minimax_h3_long_video \
 
 The example configuration contains placeholder asset paths. Replace them with real files before a non-dry run. No model weights, generated media, or private data belong in Git.
 
+## Requirements and verification
+
+- Python 3.10 or newer.
+- Dry-run and contract tests require no GPU, model weights, or media assets.
+- Real generation requires a compatible PyTorch/Diffusers environment, `ffmpeg`, and `ffprobe` on `PATH`.
+- The default model is `MiniMaxAI/MiniMax-H3`; review the upstream model license before use or redistribution.
+
+Run the CPU-only checks from the repository root:
+
+```bash
+python -m compileall -q src tests
+PYTHONPATH=src python -m unittest discover -s tests -v
+./scripts/check_dry_run.sh
+```
+
+## Storyboard contract and resume behavior
+
+The current baseline requires `duration_s=60` and `fps=24`. Shots must cover the full timeline without gaps, and asset paths are resolved relative to the storyboard file. Assets may be `image`, `video`, or `audio`; an explicit Ref2VA audio reference cannot be the only reference, each explicit audio must be 2–15 seconds, and their total duration must not exceed 15 seconds.
+
+`--resume` reuses completed chunk videos only when the existing manifest fingerprint matches the storyboard, generation configuration, chunk plan, and asset metadata. A mismatch stops the run instead of mixing incompatible outputs. Continuation tails are regenerated from the current chunk after successful generation, and the H3 pipeline is loaded only when a missing chunk requires inference.
+
 ## Repository layout
 
 ```text

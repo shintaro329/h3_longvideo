@@ -40,6 +40,27 @@ PYTHONPATH=src python -m minimax_h3_long_video \
 
 示例配置中的资产路径是占位路径。真实生成前应替换为实际文件。模型权重、生成视频和私有数据不得提交到 Git。
 
+## 环境要求与验证
+
+- Python 3.10 或更高版本。
+- dry-run 和契约测试不需要 GPU、模型权重或真实媒体资产。
+- 真实生成需要兼容的 PyTorch/Diffusers 环境，并确保 `ffmpeg`、`ffprobe` 在 `PATH` 中。
+- 默认模型为 `MiniMaxAI/MiniMax-H3`；使用或再分发前应阅读上游模型许可证。
+
+在仓库根目录执行 CPU-only 检查：
+
+```bash
+python -m compileall -q src tests
+PYTHONPATH=src python -m unittest discover -s tests -v
+./scripts/check_dry_run.sh
+```
+
+## Storyboard 契约与 resume 行为
+
+当前 baseline 要求 `duration_s=60`、`fps=24`。所有 shot 必须无间隙覆盖完整时间轴，资产路径相对于 storyboard 文件解析。资产类型可以是 `image`、`video` 或 `audio`；显式 Ref2VA 音频不能作为唯一参考，每个显式音频时长必须为 2–15 秒，显式音频总时长不得超过 15 秒。
+
+`--resume` 只有在已有 manifest 的 fingerprint 与 storyboard、生成配置、窗口计划和资产元信息一致时才会复用已完成窗口。fingerprint 不一致会直接终止，避免混用不兼容产物。每个窗口成功生成后都会从当前窗口重新生成 continuation tail；只有发现缺失窗口需要推理时才加载 H3 pipeline。
+
 ## 目录职责
 
 ```text
